@@ -2,6 +2,7 @@ streamlit
 darts==0.41.0
 torch
 transformers
+torchvision
 pandas
 numpy
 matplotlib

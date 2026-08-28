@@ -7,3 +7,4 @@ numpy
 matplotlib
 plotly
 requests
+pytorch-lightning==2.5.6

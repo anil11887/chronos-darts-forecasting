@@ -13,11 +13,14 @@ Run locally with:
     streamlit run app.py
 """
 
+import gzip
+import shutil
 import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import requests
 import streamlit as st
 
 # ============================================================
@@ -27,6 +30,15 @@ import streamlit as st
 PROJECT_ROOT = Path(__file__).resolve().parent
 RESULTS_DIR = PROJECT_ROOT / "results"
 DATA_PATH = PROJECT_ROOT / "data" / "raw" / "LD2011_2014.txt"
+DATA_GZ_PATH = PROJECT_ROOT / "data" / "raw" / "LD2011_2014.txt.gz"
+
+# Uploaded to the release as a gzip-compressed asset to cut download
+# time on Streamlit Cloud's cold starts (the raw file is ~678 MB;
+# gzip brings that down substantially since it's a repetitive CSV).
+DATA_URL = (
+    "https://github.com/anil11887/chronos-darts-forecasting/"
+    "releases/latest/download/LD2011_2014.txt.gz"
+)
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
@@ -66,16 +78,97 @@ def try_load_csv(filename, parse_dates=None):
     return pd.read_csv(path, parse_dates=parse_dates)
 
 
+@st.cache_resource
+def download_dataset_if_needed():
+    """
+    Download and decompress LD2011_2014.txt when it is not available
+    locally.
+
+    Local:
+        Uses data/raw/LD2011_2014.txt directly.
+
+    Streamlit Cloud:
+        Downloads the gzip-compressed dataset from the GitHub Release
+        asset, then decompresses it to data/raw/LD2011_2014.txt.
+    """
+    if DATA_PATH.exists():
+        return DATA_PATH
+
+    DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    st.info("Downloading LD2011_2014 dataset...")
+
+    try:
+        with requests.get(
+            DATA_URL,
+            stream=True,
+            timeout=300,
+        ) as response:
+
+            response.raise_for_status()
+
+            total_size = int(
+                response.headers.get("content-length", 0)
+            )
+
+            downloaded = 0
+
+            with open(DATA_GZ_PATH, "wb") as file:
+                for chunk in response.iter_content(
+                    chunk_size=1024 * 1024
+                ):
+                    if chunk:
+                        file.write(chunk)
+                        downloaded += len(chunk)
+
+                        if total_size:
+                            progress = min(
+                                downloaded / total_size,
+                                1.0,
+                            )
+                            st.progress(
+                                progress,
+                                text=(
+                                    f"Downloading dataset: "
+                                    f"{progress:.0%}"
+                                ),
+                            )
+
+        st.info("Decompressing dataset...")
+
+        with gzip.open(DATA_GZ_PATH, "rb") as f_in:
+            with open(DATA_PATH, "wb") as f_out:
+                shutil.copyfileobj(f_in, f_out)
+
+        DATA_GZ_PATH.unlink()
+
+        return DATA_PATH
+
+    except Exception as exc:
+        if DATA_PATH.exists():
+            DATA_PATH.unlink()
+        if DATA_GZ_PATH.exists():
+            DATA_GZ_PATH.unlink()
+
+        raise RuntimeError(
+            "Unable to download or decompress LD2011_2014.txt. "
+            f"Download URL: {DATA_URL}\n\n"
+            f"Original error: {exc}"
+        ) from exc
+
+
 @st.cache_data
 def load_raw_wide_df():
-    """Wide-format dataframe (MT_001, MT_002, ... as columns)."""
-    return load_raw_dataset(str(DATA_PATH))
+    """Load the LD2011_2014 dataset as a wide dataframe."""
+    dataset_path = download_dataset_if_needed()
+    return load_raw_dataset(str(dataset_path))
 
 
 @st.cache_data
 def load_long_df():
-    """Long-format dataframe (timestamp | series_id | value)."""
-    return load_dataset(str(DATA_PATH))
+    """Load the LD2011_2014 dataset as a long dataframe."""
+    dataset_path = download_dataset_if_needed()
+    return load_dataset(str(dataset_path))
 
 
 def build_chronos_model(input_chunk_length=512, output_chunk_length=96):
@@ -551,5 +644,4 @@ elif section == "⏱️ Forecast Horizon Analysis":
         ax.set_ylabel("RMSE")
         ax.legend()
         st.pyplot(fig)
-
         st.dataframe(horizon_df, use_container_width=True)
